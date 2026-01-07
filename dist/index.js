@@ -32293,6 +32293,7 @@ exports.shouldIgnoreFile = shouldIgnoreFile;
 exports.findDeadCode = findDeadCode;
 exports.formatPrComment = formatPrComment;
 const minimatch_1 = __nccwpck_require__(6507);
+/** Default glob patterns for files to exclude from dead code analysis. */
 exports.DEFAULT_EXCLUDE_PATTERNS = [
     '**/node_modules/**',
     '**/dist/**',
@@ -32311,6 +32312,7 @@ exports.DEFAULT_EXCLUDE_PATTERNS = [
     '**/__tests__/**',
     '**/__mocks__/**',
 ];
+/** Glob patterns for files that are considered entry points. */
 exports.ENTRY_POINT_PATTERNS = [
     '**/index.ts',
     '**/index.js',
@@ -32322,6 +32324,7 @@ exports.ENTRY_POINT_PATTERNS = [
     '**/*.spec.*',
     '**/__tests__/**',
 ];
+/** Function names that are considered entry points. */
 exports.ENTRY_POINT_FUNCTION_NAMES = [
     'main',
     'run',
@@ -32333,46 +32336,61 @@ exports.ENTRY_POINT_FUNCTION_NAMES = [
     'handler',
     'GET', 'POST', 'PUT', 'DELETE', 'PATCH',
 ];
+/**
+ * Checks if a file path matches any entry point pattern.
+ * @param filePath - The file path to check
+ * @returns True if the file is an entry point
+ */
 function isEntryPointFile(filePath) {
     return exports.ENTRY_POINT_PATTERNS.some(pattern => (0, minimatch_1.minimatch)(filePath, pattern));
 }
+/**
+ * Checks if a function name is a common entry point name.
+ * @param name - The function name to check
+ * @returns True if the function name is an entry point
+ */
 function isEntryPointFunction(name) {
     const lowerName = name.toLowerCase();
     return exports.ENTRY_POINT_FUNCTION_NAMES.some(ep => lowerName === ep.toLowerCase());
 }
+/**
+ * Checks if a file should be ignored based on exclude patterns.
+ * @param filePath - The file path to check
+ * @param ignorePatterns - Additional patterns to ignore
+ * @returns True if the file should be ignored
+ */
 function shouldIgnoreFile(filePath, ignorePatterns = []) {
     const allPatterns = [...exports.DEFAULT_EXCLUDE_PATTERNS, ...ignorePatterns];
     return allPatterns.some(pattern => (0, minimatch_1.minimatch)(filePath, pattern));
 }
+/**
+ * Analyzes a code graph to find functions that are never called.
+ * @param nodes - All nodes from the code graph
+ * @param relationships - All relationships from the code graph
+ * @param ignorePatterns - Additional glob patterns to ignore
+ * @returns Array of potentially unused functions
+ */
 function findDeadCode(nodes, relationships, ignorePatterns = []) {
-    // Get all function nodes
     const functionNodes = nodes.filter(node => node.labels?.includes('Function'));
-    // Get all "calls" relationships
     const callRelationships = relationships.filter(rel => rel.type === 'calls');
-    // Build a set of all function IDs that are called
     const calledFunctionIds = new Set(callRelationships.map(rel => rel.endNode));
     const deadCode = [];
     for (const node of functionNodes) {
         const props = node.properties || {};
         const filePath = props.filePath || props.file || '';
         const name = props.name || 'anonymous';
-        // Skip if this function is called somewhere
         if (calledFunctionIds.has(node.id)) {
             continue;
         }
-        // Skip if file matches ignore patterns
         if (shouldIgnoreFile(filePath, ignorePatterns)) {
             continue;
         }
-        // Skip if this is an entry point file
         if (isEntryPointFile(filePath)) {
             continue;
         }
-        // Skip if this is an entry point function name
         if (isEntryPointFunction(name)) {
             continue;
         }
-        // Skip exported functions (they might be called externally)
         if (props.exported === true || props.isExported === true) {
             continue;
         }
@@ -32386,6 +32404,11 @@ function findDeadCode(nodes, relationships, ignorePatterns = []) {
     }
     return deadCode;
 }
+/**
+ * Formats dead code results as a GitHub PR comment.
+ * @param deadCode - Array of dead code results
+ * @returns Markdown-formatted comment string
+ */
 function formatPrComment(deadCode) {
     if (deadCode.length === 0) {
         return `## Dead Code Hunter

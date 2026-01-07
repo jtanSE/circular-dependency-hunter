@@ -1,6 +1,9 @@
 import { minimatch } from 'minimatch';
 import { CodeGraphNode, CodeGraphRelationship } from '@supermodeltools/sdk';
 
+/**
+ * Represents a potentially unused function found in the codebase.
+ */
 export interface DeadCodeResult {
   id: string;
   name: string;
@@ -9,6 +12,7 @@ export interface DeadCodeResult {
   endLine?: number;
 }
 
+/** Default glob patterns for files to exclude from dead code analysis. */
 export const DEFAULT_EXCLUDE_PATTERNS = [
   '**/node_modules/**',
   '**/dist/**',
@@ -28,6 +32,7 @@ export const DEFAULT_EXCLUDE_PATTERNS = [
   '**/__mocks__/**',
 ];
 
+/** Glob patterns for files that are considered entry points. */
 export const ENTRY_POINT_PATTERNS = [
   '**/index.ts',
   '**/index.js',
@@ -40,6 +45,7 @@ export const ENTRY_POINT_PATTERNS = [
   '**/__tests__/**',
 ];
 
+/** Function names that are considered entry points. */
 export const ENTRY_POINT_FUNCTION_NAMES = [
   'main',
   'run',
@@ -52,34 +58,53 @@ export const ENTRY_POINT_FUNCTION_NAMES = [
   'GET', 'POST', 'PUT', 'DELETE', 'PATCH',
 ];
 
+/**
+ * Checks if a file path matches any entry point pattern.
+ * @param filePath - The file path to check
+ * @returns True if the file is an entry point
+ */
 export function isEntryPointFile(filePath: string): boolean {
   return ENTRY_POINT_PATTERNS.some(pattern => minimatch(filePath, pattern));
 }
 
+/**
+ * Checks if a function name is a common entry point name.
+ * @param name - The function name to check
+ * @returns True if the function name is an entry point
+ */
 export function isEntryPointFunction(name: string): boolean {
   const lowerName = name.toLowerCase();
   return ENTRY_POINT_FUNCTION_NAMES.some(ep => lowerName === ep.toLowerCase());
 }
 
+/**
+ * Checks if a file should be ignored based on exclude patterns.
+ * @param filePath - The file path to check
+ * @param ignorePatterns - Additional patterns to ignore
+ * @returns True if the file should be ignored
+ */
 export function shouldIgnoreFile(filePath: string, ignorePatterns: string[] = []): boolean {
   const allPatterns = [...DEFAULT_EXCLUDE_PATTERNS, ...ignorePatterns];
   return allPatterns.some(pattern => minimatch(filePath, pattern));
 }
 
+/**
+ * Analyzes a code graph to find functions that are never called.
+ * @param nodes - All nodes from the code graph
+ * @param relationships - All relationships from the code graph
+ * @param ignorePatterns - Additional glob patterns to ignore
+ * @returns Array of potentially unused functions
+ */
 export function findDeadCode(
   nodes: CodeGraphNode[],
   relationships: CodeGraphRelationship[],
   ignorePatterns: string[] = []
 ): DeadCodeResult[] {
-  // Get all function nodes
   const functionNodes = nodes.filter(node =>
     node.labels?.includes('Function')
   );
 
-  // Get all "calls" relationships
   const callRelationships = relationships.filter(rel => rel.type === 'calls');
-
-  // Build a set of all function IDs that are called
   const calledFunctionIds = new Set(callRelationships.map(rel => rel.endNode));
 
   const deadCode: DeadCodeResult[] = [];
@@ -89,27 +114,22 @@ export function findDeadCode(
     const filePath = props.filePath || props.file || '';
     const name = props.name || 'anonymous';
 
-    // Skip if this function is called somewhere
     if (calledFunctionIds.has(node.id)) {
       continue;
     }
 
-    // Skip if file matches ignore patterns
     if (shouldIgnoreFile(filePath, ignorePatterns)) {
       continue;
     }
 
-    // Skip if this is an entry point file
     if (isEntryPointFile(filePath)) {
       continue;
     }
 
-    // Skip if this is an entry point function name
     if (isEntryPointFunction(name)) {
       continue;
     }
 
-    // Skip exported functions (they might be called externally)
     if (props.exported === true || props.isExported === true) {
       continue;
     }
@@ -126,6 +146,11 @@ export function findDeadCode(
   return deadCode;
 }
 
+/**
+ * Formats dead code results as a GitHub PR comment.
+ * @param deadCode - Array of dead code results
+ * @returns Markdown-formatted comment string
+ */
 export function formatPrComment(deadCode: DeadCodeResult[]): string {
   if (deadCode.length === 0) {
     return `## Dead Code Hunter
