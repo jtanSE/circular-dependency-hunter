@@ -1,7 +1,7 @@
 {
-  "name": "dead-code-hunter",
+  "name": "circular-dependency-hunter",
   "version": "0.1.0",
-  "description": "GitHub Action to find unreachable functions using Supermodel call graphs",
+  "description": "GitHub Action to find circular dependencies using Supermodel graphs",
   "main": "dist/index.js",
   "scripts": {
     "build": "ncc build src/index.ts -o dist",
@@ -10,14 +10,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/supermodeltools/dead-code-hunter.git"
+    "url": "git+https://github.com/supermodeltools/circular-dependency-hunter.git"
   },
   "keywords": [
     "github-action",
-    "dead-code",
+    "circular-dependencies",
     "static-analysis",
     "supermodel",
-    "call-graph"
+    "dependency-graph"
   ],
   "author": "Supermodel Tools",
   "license": "MIT",

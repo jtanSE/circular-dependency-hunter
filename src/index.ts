@@ -4,10 +4,10 @@ import * as github from '@actions/github';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { Configuration, DefaultApi } from '@supermodeltools/sdk';
-import { findDeadCode, formatPrComment } from './dead-code';
+import { findCircularDependencies, formatPrComment } from './circular-deps';
 
 async function createZipArchive(workspacePath: string): Promise<string> {
-  const zipPath = path.join(workspacePath, '.dead-code-hunter-repo.zip');
+  const zipPath = path.join(workspacePath, '.circular-dependency-hunter-repo.zip');
 
   core.info('Creating zip archive...');
 
@@ -48,12 +48,13 @@ async function run(): Promise<void> {
     }
 
     const commentOnPr = core.getBooleanInput('comment-on-pr');
-    const failOnDeadCode = core.getBooleanInput('fail-on-dead-code');
+    const failOnCircularDeps = core.getBooleanInput('fail-on-circular-deps');
     const ignorePatterns = JSON.parse(core.getInput('ignore-patterns') || '[]');
+    const debug = core.getBooleanInput('debug');
 
     const workspacePath = process.env.GITHUB_WORKSPACE || process.cwd();
 
-    core.info('Dead Code Hunter starting...');
+    core.info('Circular Dependency Hunter starting...');
 
     // Step 1: Create zip archive
     const zipPath = await createZipArchive(workspacePath);
@@ -79,24 +80,39 @@ async function run(): Promise<void> {
       file: zipBlob,
     });
 
-    // Step 4: Analyze for dead code
+    // Step 4: Analyze for circular dependencies
     const nodes = response.graph?.nodes || [];
     const relationships = response.graph?.relationships || [];
 
-    const deadCode = findDeadCode(nodes, relationships, ignorePatterns);
+    if (debug) {
+      const relationshipTypes = Array.from(
+        new Set(relationships.map(rel => rel.type).filter(Boolean))
+      ).sort();
+      core.info(`Graph nodes: ${nodes.length}`);
+      core.info(`Graph relationships: ${relationships.length}`);
+      core.info(`Relationship types: ${relationshipTypes.join(', ') || 'none'}`);
+      const sampleEdges = relationships.slice(0, 20).map(rel => ({
+        type: rel.type,
+        startNode: rel.startNode,
+        endNode: rel.endNode,
+      }));
+      core.info(`Sample edges: ${JSON.stringify(sampleEdges, null, 2)}`);
+    }
 
-    core.info(`Found ${deadCode.length} potentially unused functions`);
+    const cycles = findCircularDependencies(nodes, relationships, ignorePatterns);
+
+    core.info(`Found ${cycles.length} circular dependenc${cycles.length === 1 ? 'y' : 'ies'}`);
 
     // Step 5: Set outputs
-    core.setOutput('dead-code-count', deadCode.length);
-    core.setOutput('dead-code-json', JSON.stringify(deadCode));
+    core.setOutput('circular-dependency-count', cycles.length);
+    core.setOutput('circular-dependency-json', JSON.stringify(cycles));
 
     // Step 6: Post PR comment if enabled
     if (commentOnPr && github.context.payload.pull_request) {
       const token = process.env.GITHUB_TOKEN;
       if (token) {
         const octokit = github.getOctokit(token);
-        const comment = formatPrComment(deadCode);
+        const comment = formatPrComment(cycles);
 
         await octokit.rest.issues.createComment({
           owner: github.context.repo.owner,
@@ -114,9 +130,9 @@ async function run(): Promise<void> {
     // Step 7: Clean up
     await fs.unlink(zipPath);
 
-    // Step 8: Fail if configured and dead code found
-    if (deadCode.length > 0 && failOnDeadCode) {
-      core.setFailed(`Found ${deadCode.length} potentially unused functions`);
+    // Step 8: Fail if configured and circular dependencies found
+    if (cycles.length > 0 && failOnCircularDeps) {
+      core.setFailed(`Found ${cycles.length} circular dependenc${cycles.length === 1 ? 'y' : 'ies'}`);
     }
 
   } catch (error: any) {

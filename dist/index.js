@@ -32280,20 +32280,18 @@ function wrappy (fn, cb) {
 
 /***/ }),
 
-/***/ 1655:
+/***/ 1537:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ENTRY_POINT_FUNCTION_NAMES = exports.ENTRY_POINT_PATTERNS = exports.DEFAULT_EXCLUDE_PATTERNS = void 0;
-exports.isEntryPointFile = isEntryPointFile;
-exports.isEntryPointFunction = isEntryPointFunction;
+exports.DEFAULT_EXCLUDE_PATTERNS = void 0;
 exports.shouldIgnoreFile = shouldIgnoreFile;
-exports.findDeadCode = findDeadCode;
+exports.findCircularDependencies = findCircularDependencies;
 exports.formatPrComment = formatPrComment;
 const minimatch_1 = __nccwpck_require__(6507);
-/** Default glob patterns for files to exclude from dead code analysis. */
+/** Default glob patterns for files to exclude from analysis. */
 exports.DEFAULT_EXCLUDE_PATTERNS = [
     '**/node_modules/**',
     '**/dist/**',
@@ -32312,47 +32310,6 @@ exports.DEFAULT_EXCLUDE_PATTERNS = [
     '**/__tests__/**',
     '**/__mocks__/**',
 ];
-/** Glob patterns for files that are considered entry points. */
-exports.ENTRY_POINT_PATTERNS = [
-    '**/index.ts',
-    '**/index.js',
-    '**/main.ts',
-    '**/main.js',
-    '**/app.ts',
-    '**/app.js',
-    '**/*.test.*',
-    '**/*.spec.*',
-    '**/__tests__/**',
-];
-/** Function names that are considered entry points. */
-exports.ENTRY_POINT_FUNCTION_NAMES = [
-    'main',
-    'run',
-    'start',
-    'init',
-    'setup',
-    'bootstrap',
-    'default',
-    'handler',
-    'GET', 'POST', 'PUT', 'DELETE', 'PATCH',
-];
-/**
- * Checks if a file path matches any entry point pattern.
- * @param filePath - The file path to check
- * @returns True if the file is an entry point
- */
-function isEntryPointFile(filePath) {
-    return exports.ENTRY_POINT_PATTERNS.some(pattern => (0, minimatch_1.minimatch)(filePath, pattern));
-}
-/**
- * Checks if a function name is a common entry point name.
- * @param name - The function name to check
- * @returns True if the function name is an entry point
- */
-function isEntryPointFunction(name) {
-    const lowerName = name.toLowerCase();
-    return exports.ENTRY_POINT_FUNCTION_NAMES.some(ep => lowerName === ep.toLowerCase());
-}
 /**
  * Checks if a file should be ignored based on exclude patterns.
  * @param filePath - The file path to check
@@ -32363,77 +32320,148 @@ function shouldIgnoreFile(filePath, ignorePatterns = []) {
     const allPatterns = [...exports.DEFAULT_EXCLUDE_PATTERNS, ...ignorePatterns];
     return allPatterns.some(pattern => (0, minimatch_1.minimatch)(filePath, pattern));
 }
+function getFilePathFromNode(node) {
+    const props = node.properties || {};
+    return (props.filePath ||
+        props.path ||
+        props.file ||
+        props.name ||
+        node.id);
+}
+function isDependencyRelationship(rel) {
+    const type = (rel.type || '').toLowerCase();
+    if (type.includes('call')) {
+        return false;
+    }
+    const dependencyMarkers = [
+        'import',
+        'depend',
+        'require',
+        'use',
+        'include',
+        'reference',
+        'module',
+    ];
+    return dependencyMarkers.some(marker => type.includes(marker));
+}
+function rotateToSmallest(values) {
+    if (values.length === 0) {
+        return values;
+    }
+    let minIndex = 0;
+    for (let i = 1; i < values.length; i += 1) {
+        if (values[i] < values[minIndex]) {
+            minIndex = i;
+        }
+    }
+    return values.slice(minIndex).concat(values.slice(0, minIndex));
+}
+function normalizeCycle(cycle) {
+    const trimmed = cycle.length > 1 && cycle[0] === cycle[cycle.length - 1]
+        ? cycle.slice(0, -1)
+        : cycle.slice();
+    const forward = rotateToSmallest(trimmed);
+    const backward = rotateToSmallest(trimmed.slice().reverse());
+    const forwardKey = forward.join('->');
+    const backwardKey = backward.join('->');
+    return forwardKey <= backwardKey ? forward : backward;
+}
 /**
- * Analyzes a code graph to find functions that are never called.
+ * Analyzes a code graph to find circular dependencies between files/modules.
  * @param nodes - All nodes from the code graph
  * @param relationships - All relationships from the code graph
  * @param ignorePatterns - Additional glob patterns to ignore
- * @returns Array of potentially unused functions
+ * @returns Array of circular dependency cycles
  */
-function findDeadCode(nodes, relationships, ignorePatterns = []) {
-    const functionNodes = nodes.filter(node => node.labels?.includes('Function'));
-    const callRelationships = relationships.filter(rel => rel.type === 'calls');
-    const calledFunctionIds = new Set(callRelationships.map(rel => rel.endNode));
-    const deadCode = [];
-    for (const node of functionNodes) {
-        const props = node.properties || {};
-        const filePath = props.filePath || props.file || '';
-        const name = props.name || 'anonymous';
-        if (calledFunctionIds.has(node.id)) {
+function findCircularDependencies(nodes, relationships, ignorePatterns = []) {
+    const fileNodes = nodes.filter(node => node.labels?.some(label => label === 'File' || label === 'Module'));
+    const filePathById = new Map();
+    for (const node of fileNodes) {
+        const filePath = getFilePathFromNode(node);
+        if (!filePath || shouldIgnoreFile(filePath, ignorePatterns)) {
             continue;
         }
-        if (shouldIgnoreFile(filePath, ignorePatterns)) {
-            continue;
-        }
-        if (isEntryPointFile(filePath)) {
-            continue;
-        }
-        if (isEntryPointFunction(name)) {
-            continue;
-        }
-        if (props.exported === true || props.isExported === true) {
-            continue;
-        }
-        deadCode.push({
-            id: node.id,
-            name,
-            filePath,
-            startLine: props.startLine,
-            endLine: props.endLine,
-        });
+        filePathById.set(node.id, filePath);
     }
-    return deadCode;
+    const adjacency = new Map();
+    for (const nodeId of filePathById.keys()) {
+        adjacency.set(nodeId, []);
+    }
+    const dependencyRelationships = relationships.filter(isDependencyRelationship);
+    for (const rel of dependencyRelationships) {
+        if (!filePathById.has(rel.startNode) || !filePathById.has(rel.endNode)) {
+            continue;
+        }
+        adjacency.get(rel.startNode)?.push(rel.endNode);
+    }
+    const results = [];
+    const seenCycles = new Set();
+    const visited = new Set();
+    const stack = [];
+    const onStack = new Set();
+    const dfs = (nodeId) => {
+        visited.add(nodeId);
+        stack.push(nodeId);
+        onStack.add(nodeId);
+        const neighbors = adjacency.get(nodeId) || [];
+        for (const neighbor of neighbors) {
+            if (!visited.has(neighbor)) {
+                dfs(neighbor);
+                continue;
+            }
+            if (onStack.has(neighbor)) {
+                const cycleStartIndex = stack.indexOf(neighbor);
+                const cycleIds = stack.slice(cycleStartIndex).concat(neighbor);
+                const cyclePaths = cycleIds.map(id => filePathById.get(id) || id);
+                const normalized = normalizeCycle(cyclePaths);
+                const cycleKey = normalized.join('->');
+                if (!seenCycles.has(cycleKey)) {
+                    seenCycles.add(cycleKey);
+                    results.push({
+                        id: cycleKey,
+                        cycle: normalized,
+                        length: normalized.length,
+                    });
+                }
+            }
+        }
+        stack.pop();
+        onStack.delete(nodeId);
+    };
+    for (const nodeId of adjacency.keys()) {
+        if (!visited.has(nodeId)) {
+            dfs(nodeId);
+        }
+    }
+    return results;
 }
 /**
- * Formats dead code results as a GitHub PR comment.
- * @param deadCode - Array of dead code results
+ * Formats circular dependency results as a GitHub PR comment.
+ * @param cycles - Array of circular dependency cycles
  * @returns Markdown-formatted comment string
  */
-function formatPrComment(deadCode) {
-    if (deadCode.length === 0) {
-        return `## Dead Code Hunter
+function formatPrComment(cycles) {
+    if (cycles.length === 0) {
+        return `## Circular Dependency Hunter
 
-No dead code found! Your codebase is clean.`;
+No circular dependencies found! Your codebase is clean.`;
     }
-    const rows = deadCode
+    const rows = cycles
         .slice(0, 50)
-        .map(dc => {
-        const lineInfo = dc.startLine ? `L${dc.startLine}` : '';
-        const fileLink = dc.startLine
-            ? `${dc.filePath}#L${dc.startLine}`
-            : dc.filePath;
-        return `| \`${dc.name}\` | ${fileLink} | ${lineInfo} |`;
+        .map((cycle, index) => {
+        const path = cycle.cycle.concat(cycle.cycle[0]).join(' -> ');
+        return `| ${index + 1} | ${path} |`;
     })
         .join('\n');
-    let comment = `## Dead Code Hunter
+    let comment = `## Circular Dependency Hunter
 
-Found **${deadCode.length}** potentially unused function${deadCode.length === 1 ? '' : 's'}:
+Found **${cycles.length}** circular dependenc${cycles.length === 1 ? 'y' : 'ies'}:
 
-| Function | File | Line |
-|----------|------|------|
+| # | Cycle |
+|---|-------|
 ${rows}`;
-    if (deadCode.length > 50) {
-        comment += `\n\n_...and ${deadCode.length - 50} more. See action output for full list._`;
+    if (cycles.length > 50) {
+        comment += `\n\n_...and ${cycles.length - 50} more. See action output for full list._`;
     }
     comment += `\n\n---\n_Powered by [Supermodel](https://supermodeltools.com) graph analysis_`;
     return comment;
@@ -32487,9 +32515,9 @@ const github = __importStar(__nccwpck_require__(3228));
 const fs = __importStar(__nccwpck_require__(1943));
 const path = __importStar(__nccwpck_require__(6928));
 const sdk_1 = __nccwpck_require__(6381);
-const dead_code_1 = __nccwpck_require__(1655);
+const circular_deps_1 = __nccwpck_require__(1537);
 async function createZipArchive(workspacePath) {
-    const zipPath = path.join(workspacePath, '.dead-code-hunter-repo.zip');
+    const zipPath = path.join(workspacePath, '.circular-dependency-hunter-repo.zip');
     core.info('Creating zip archive...');
     await exec.exec('git', ['archive', '-o', zipPath, 'HEAD'], {
         cwd: workspacePath,
@@ -32520,10 +32548,11 @@ async function run() {
             core.warning('API key format looks incorrect. Get your key at https://dashboard.supermodeltools.com');
         }
         const commentOnPr = core.getBooleanInput('comment-on-pr');
-        const failOnDeadCode = core.getBooleanInput('fail-on-dead-code');
+        const failOnCircularDeps = core.getBooleanInput('fail-on-circular-deps');
         const ignorePatterns = JSON.parse(core.getInput('ignore-patterns') || '[]');
+        const debug = core.getBooleanInput('debug');
         const workspacePath = process.env.GITHUB_WORKSPACE || process.cwd();
-        core.info('Dead Code Hunter starting...');
+        core.info('Circular Dependency Hunter starting...');
         // Step 1: Create zip archive
         const zipPath = await createZipArchive(workspacePath);
         // Step 2: Generate idempotency key
@@ -32541,20 +32570,32 @@ async function run() {
             idempotencyKey,
             file: zipBlob,
         });
-        // Step 4: Analyze for dead code
+        // Step 4: Analyze for circular dependencies
         const nodes = response.graph?.nodes || [];
         const relationships = response.graph?.relationships || [];
-        const deadCode = (0, dead_code_1.findDeadCode)(nodes, relationships, ignorePatterns);
-        core.info(`Found ${deadCode.length} potentially unused functions`);
+        if (debug) {
+            const relationshipTypes = Array.from(new Set(relationships.map(rel => rel.type).filter(Boolean))).sort();
+            core.info(`Graph nodes: ${nodes.length}`);
+            core.info(`Graph relationships: ${relationships.length}`);
+            core.info(`Relationship types: ${relationshipTypes.join(', ') || 'none'}`);
+            const sampleEdges = relationships.slice(0, 20).map(rel => ({
+                type: rel.type,
+                startNode: rel.startNode,
+                endNode: rel.endNode,
+            }));
+            core.info(`Sample edges: ${JSON.stringify(sampleEdges, null, 2)}`);
+        }
+        const cycles = (0, circular_deps_1.findCircularDependencies)(nodes, relationships, ignorePatterns);
+        core.info(`Found ${cycles.length} circular dependenc${cycles.length === 1 ? 'y' : 'ies'}`);
         // Step 5: Set outputs
-        core.setOutput('dead-code-count', deadCode.length);
-        core.setOutput('dead-code-json', JSON.stringify(deadCode));
+        core.setOutput('circular-dependency-count', cycles.length);
+        core.setOutput('circular-dependency-json', JSON.stringify(cycles));
         // Step 6: Post PR comment if enabled
         if (commentOnPr && github.context.payload.pull_request) {
             const token = process.env.GITHUB_TOKEN;
             if (token) {
                 const octokit = github.getOctokit(token);
-                const comment = (0, dead_code_1.formatPrComment)(deadCode);
+                const comment = (0, circular_deps_1.formatPrComment)(cycles);
                 await octokit.rest.issues.createComment({
                     owner: github.context.repo.owner,
                     repo: github.context.repo.repo,
@@ -32569,9 +32610,9 @@ async function run() {
         }
         // Step 7: Clean up
         await fs.unlink(zipPath);
-        // Step 8: Fail if configured and dead code found
-        if (deadCode.length > 0 && failOnDeadCode) {
-            core.setFailed(`Found ${deadCode.length} potentially unused functions`);
+        // Step 8: Fail if configured and circular dependencies found
+        if (cycles.length > 0 && failOnCircularDeps) {
+            core.setFailed(`Found ${cycles.length} circular dependenc${cycles.length === 1 ? 'y' : 'ies'}`);
         }
     }
     catch (error) {
