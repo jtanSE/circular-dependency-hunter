@@ -101,6 +101,18 @@ async function run(): Promise<void> {
       if (stats) {
         core.info(`Graph stats: ${JSON.stringify(stats)}`);
       }
+      const sampleNodes = nodes.slice(0, 10).map(node => ({
+        id: node.id,
+        labels: node.labels,
+        properties: node.properties,
+      }));
+      const sampleRelationships = relationships.slice(0, 10).map(rel => ({
+        type: rel.type,
+        startNode: rel.startNode,
+        endNode: rel.endNode,
+      }));
+      core.info(`Sample nodes: ${JSON.stringify(sampleNodes, null, 2)}`);
+      core.info(`Sample relationships: ${JSON.stringify(sampleRelationships, null, 2)}`);
       const relationshipTypes = Array.from(
         new Set(relationships.map(rel => rel.type).filter(Boolean))
       ).sort();
