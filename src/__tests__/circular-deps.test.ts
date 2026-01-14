@@ -99,6 +99,26 @@ describe('findCircularDependencies', () => {
 
     expect(cycles).toHaveLength(1);
   });
+
+  it('should resolve extensionless paths against file nodes', () => {
+    const nodes: CodeGraphNode[] = [
+      { id: 'fileA', labels: ['File'], properties: { filePath: 'src/a.js' } },
+      { id: 'fileB', labels: ['File'], properties: { filePath: 'src/b.js' } },
+      { id: 'fnA', labels: ['Function'], properties: { filePath: 'src/a' } },
+      { id: 'fnB', labels: ['Function'], properties: { filePath: 'src/b' } },
+    ];
+
+    const relationships: CodeGraphRelationship[] = [
+      { id: 'r1', type: 'imports', startNode: 'fnA', endNode: 'fnB' },
+      { id: 'r2', type: 'imports', startNode: 'fnB', endNode: 'fnA' },
+    ];
+
+    const cycles = findCircularDependencies(nodes, relationships);
+
+    expect(cycles).toHaveLength(1);
+    expect(cycles[0].cycle).toContain('src/a.js');
+    expect(cycles[0].cycle).toContain('src/b.js');
+  });
 });
 
 describe('formatPrComment', () => {

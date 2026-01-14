@@ -32320,6 +32320,9 @@ function shouldIgnoreFile(filePath, ignorePatterns = []) {
     const allPatterns = [...exports.DEFAULT_EXCLUDE_PATTERNS, ...ignorePatterns];
     return allPatterns.some(pattern => (0, minimatch_1.minimatch)(filePath, pattern));
 }
+function normalizePath(value) {
+    return value.replace(/\\/g, '/');
+}
 function getFilePathFromNode(node) {
     const props = node.properties || {};
     return (props.filePath ||
@@ -32366,6 +32369,27 @@ function normalizeCycle(cycle) {
     const backwardKey = backward.join('->');
     return forwardKey <= backwardKey ? forward : backward;
 }
+function resolveFilePath(candidate, referencePaths) {
+    const normalized = normalizePath(candidate);
+    if (referencePaths.has(normalized)) {
+        return normalized;
+    }
+    const hasExtension = /\.[^/]+$/.test(normalized);
+    const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+    if (!hasExtension) {
+        for (const ext of extensions) {
+            const withExt = `${normalized}${ext}`;
+            if (referencePaths.has(withExt)) {
+                return withExt;
+            }
+            const withIndex = `${normalized}/index${ext}`;
+            if (referencePaths.has(withIndex)) {
+                return withIndex;
+            }
+        }
+    }
+    return undefined;
+}
 /**
  * Analyzes a code graph to find circular dependencies between files/modules.
  * @param nodes - All nodes from the code graph
@@ -32374,36 +32398,64 @@ function normalizeCycle(cycle) {
  * @returns Array of circular dependency cycles
  */
 function findCircularDependencies(nodes, relationships, ignorePatterns = []) {
-    const fileNodes = nodes.filter(node => node.labels?.some(label => label === 'File' || label === 'Module'));
-    const filePathById = new Map();
-    for (const node of fileNodes) {
-        const filePath = getFilePathFromNode(node);
-        if (!filePath || shouldIgnoreFile(filePath, ignorePatterns)) {
+    const fileNodePaths = new Set();
+    for (const node of nodes) {
+        if (!node.labels?.some(label => label === 'File' || label === 'Module')) {
             continue;
         }
-        filePathById.set(node.id, filePath);
+        const rawPath = normalizePath(getFilePathFromNode(node));
+        if (!rawPath || shouldIgnoreFile(rawPath, ignorePatterns)) {
+            continue;
+        }
+        fileNodePaths.add(rawPath);
+    }
+    const referencePaths = fileNodePaths.size > 0 ? fileNodePaths : new Set();
+    if (fileNodePaths.size === 0) {
+        for (const node of nodes) {
+            const rawPath = normalizePath(getFilePathFromNode(node));
+            if (!rawPath || shouldIgnoreFile(rawPath, ignorePatterns)) {
+                continue;
+            }
+            referencePaths.add(rawPath);
+        }
+    }
+    const filePathById = new Map();
+    for (const node of nodes) {
+        const rawPath = normalizePath(getFilePathFromNode(node));
+        if (!rawPath || shouldIgnoreFile(rawPath, ignorePatterns)) {
+            continue;
+        }
+        const resolved = resolveFilePath(rawPath, referencePaths) || rawPath;
+        filePathById.set(node.id, resolved);
     }
     const adjacency = new Map();
-    for (const nodeId of filePathById.keys()) {
-        adjacency.set(nodeId, []);
+    for (const filePath of filePathById.values()) {
+        if (!adjacency.has(filePath)) {
+            adjacency.set(filePath, new Set());
+        }
     }
     const dependencyRelationships = relationships.filter(isDependencyRelationship);
     for (const rel of dependencyRelationships) {
-        if (!filePathById.has(rel.startNode) || !filePathById.has(rel.endNode)) {
+        const startPath = filePathById.get(rel.startNode);
+        const endPath = filePathById.get(rel.endNode);
+        if (!startPath || !endPath) {
             continue;
         }
-        adjacency.get(rel.startNode)?.push(rel.endNode);
+        if (startPath === endPath) {
+            continue;
+        }
+        adjacency.get(startPath)?.add(endPath);
     }
     const results = [];
     const seenCycles = new Set();
     const visited = new Set();
     const stack = [];
     const onStack = new Set();
-    const dfs = (nodeId) => {
-        visited.add(nodeId);
-        stack.push(nodeId);
-        onStack.add(nodeId);
-        const neighbors = adjacency.get(nodeId) || [];
+    const dfs = (nodePath) => {
+        visited.add(nodePath);
+        stack.push(nodePath);
+        onStack.add(nodePath);
+        const neighbors = adjacency.get(nodePath) || new Set();
         for (const neighbor of neighbors) {
             if (!visited.has(neighbor)) {
                 dfs(neighbor);
@@ -32412,8 +32464,7 @@ function findCircularDependencies(nodes, relationships, ignorePatterns = []) {
             if (onStack.has(neighbor)) {
                 const cycleStartIndex = stack.indexOf(neighbor);
                 const cycleIds = stack.slice(cycleStartIndex).concat(neighbor);
-                const cyclePaths = cycleIds.map(id => filePathById.get(id) || id);
-                const normalized = normalizeCycle(cyclePaths);
+                const normalized = normalizeCycle(cycleIds);
                 const cycleKey = normalized.join('->');
                 if (!seenCycles.has(cycleKey)) {
                     seenCycles.add(cycleKey);
@@ -32426,11 +32477,11 @@ function findCircularDependencies(nodes, relationships, ignorePatterns = []) {
             }
         }
         stack.pop();
-        onStack.delete(nodeId);
+        onStack.delete(nodePath);
     };
-    for (const nodeId of adjacency.keys()) {
-        if (!visited.has(nodeId)) {
-            dfs(nodeId);
+    for (const nodePath of adjacency.keys()) {
+        if (!visited.has(nodePath)) {
+            dfs(nodePath);
         }
     }
     return results;
