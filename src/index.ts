@@ -3,7 +3,7 @@ import * as exec from '@actions/exec';
 import * as github from '@actions/github';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { Configuration, DefaultApi } from '@supermodeltools/sdk';
+import { CodeGraphNode, CodeGraphRelationship, Configuration, DefaultApi } from '@supermodeltools/sdk';
 import { findCircularDependencies, formatPrComment } from './circular-deps';
 
 async function createZipArchive(workspacePath: string): Promise<string> {
@@ -16,7 +16,7 @@ async function createZipArchive(workspacePath: string): Promise<string> {
   });
 
   const stats = await fs.stat(zipPath);
-  core.info(`Archive size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+  core.info(`Archive size: ${stats.size} bytes (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
 
   return zipPath;
 }
@@ -75,16 +75,32 @@ async function run(): Promise<void> {
     const zipBuffer = await fs.readFile(zipPath);
     const zipBlob = new Blob([zipBuffer], { type: 'application/zip' });
 
-    const response = await api.generateDependencyGraph({
+    let response: any = await api.generateDependencyGraph({
       idempotencyKey,
       file: zipBlob,
     });
 
+    if (!response?.graph || ((response.graph.nodes?.length ?? 0) === 0 && (response.graph.relationships?.length ?? 0) === 0)) {
+      core.warning('Dependency graph empty, falling back to parse graph');
+      response = await api.generateParseGraph({
+        idempotencyKey,
+        file: zipBlob,
+      });
+    }
+
     // Step 4: Analyze for circular dependencies
-    const nodes = response.graph?.nodes || [];
-    const relationships = response.graph?.relationships || [];
+    const nodes: CodeGraphNode[] = response.graph?.nodes || [];
+    const relationships: CodeGraphRelationship[] = response.graph?.relationships || [];
 
     if (debug) {
+      const message = (response as any)?.message;
+      const stats = (response as any)?.stats;
+      if (message) {
+        core.info(`Graph message: ${message}`);
+      }
+      if (stats) {
+        core.info(`Graph stats: ${JSON.stringify(stats)}`);
+      }
       const relationshipTypes = Array.from(
         new Set(relationships.map(rel => rel.type).filter(Boolean))
       ).sort();

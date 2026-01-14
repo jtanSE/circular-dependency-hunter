@@ -32574,7 +32574,7 @@ async function createZipArchive(workspacePath) {
         cwd: workspacePath,
     });
     const stats = await fs.stat(zipPath);
-    core.info(`Archive size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+    core.info(`Archive size: ${stats.size} bytes (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
     return zipPath;
 }
 async function generateIdempotencyKey(workspacePath) {
@@ -32617,14 +32617,29 @@ async function run() {
         const api = new sdk_1.DefaultApi(config);
         const zipBuffer = await fs.readFile(zipPath);
         const zipBlob = new Blob([zipBuffer], { type: 'application/zip' });
-        const response = await api.generateDependencyGraph({
+        let response = await api.generateDependencyGraph({
             idempotencyKey,
             file: zipBlob,
         });
+        if (!response?.graph || ((response.graph.nodes?.length ?? 0) === 0 && (response.graph.relationships?.length ?? 0) === 0)) {
+            core.warning('Dependency graph empty, falling back to parse graph');
+            response = await api.generateParseGraph({
+                idempotencyKey,
+                file: zipBlob,
+            });
+        }
         // Step 4: Analyze for circular dependencies
         const nodes = response.graph?.nodes || [];
         const relationships = response.graph?.relationships || [];
         if (debug) {
+            const message = response?.message;
+            const stats = response?.stats;
+            if (message) {
+                core.info(`Graph message: ${message}`);
+            }
+            if (stats) {
+                core.info(`Graph stats: ${JSON.stringify(stats)}`);
+            }
             const relationshipTypes = Array.from(new Set(relationships.map(rel => rel.type).filter(Boolean))).sort();
             core.info(`Graph nodes: ${nodes.length}`);
             core.info(`Graph relationships: ${relationships.length}`);
