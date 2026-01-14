@@ -75,7 +75,7 @@ async function run(): Promise<void> {
     const zipBuffer = await fs.readFile(zipPath);
     const zipBlob = new Blob([zipBuffer], { type: 'application/zip' });
 
-    const response = await api.generateSupermodelGraph({
+    const response = await api.generateDependencyGraph({
       idempotencyKey,
       file: zipBlob,
     });
@@ -154,3 +154,4 @@ async function run(): Promise<void> {
 }
 
 run();
+
