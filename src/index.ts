@@ -60,7 +60,7 @@ async function run(): Promise<void> {
     const zipPath = await createZipArchive(workspacePath);
 
     // Step 2: Generate idempotency key
-    const idempotencyKey = await generateIdempotencyKey(workspacePath);
+    const baseIdempotencyKey = await generateIdempotencyKey(workspacePath);
 
     // Step 3: Call Supermodel API
     core.info('Analyzing codebase with Supermodel...');
@@ -76,14 +76,14 @@ async function run(): Promise<void> {
     const zipBlob = new Blob([zipBuffer], { type: 'application/zip' });
 
     let response: any = await api.generateDependencyGraph({
-      idempotencyKey,
+      idempotencyKey: `${baseIdempotencyKey}:dep`,
       file: zipBlob,
     });
 
     if (!response?.graph || ((response.graph.nodes?.length ?? 0) === 0 && (response.graph.relationships?.length ?? 0) === 0)) {
       core.warning('Dependency graph empty, falling back to parse graph');
       response = await api.generateParseGraph({
-        idempotencyKey,
+        idempotencyKey: `${baseIdempotencyKey}:parse`,
         file: zipBlob,
       });
     }
